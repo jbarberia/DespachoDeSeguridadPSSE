@@ -1,0 +1,21 @@
+/PSS(R)E 34
+COM
+COM SUBSYSTEM description file entry created by PSS(R)E Config File Builder
+COM
+SUBSYSTEM 'IEEE14'
+   BUS 1
+   BUS 2
+   BUS 3
+   BUS 4
+   BUS 5
+   BUS 6
+   BUS 7
+   BUS 8
+   BUS 9
+   BUS 10
+   BUS 11
+   BUS 12
+   BUS 13
+   BUS 14
+END
+END
