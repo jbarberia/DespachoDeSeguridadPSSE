@@ -1,5 +1,10 @@
 import re
 import zipfile
+import itertools
+import pandas as pd
+import psse34
+import psspy
+import pssarrays
 
 def crear_dfax(case):
     psspy.dfax_2(
@@ -59,23 +64,37 @@ def calcular_riesgo(c=1.0):
     return riesgo, sobrecargas
     
 def calcular_sensibilidad(case, identificador_linea):
-    ierr, (gen_bus,) = psspy.agenbusint(string="NUMBER")
-    
-    # TODO juntar genbus de a dos sin repeticion (i, j) (j, i) y crear lista generadores_participantes
-    
-    for gen_bus, opposing_gen_bus in generadores_participantes:
-        i, j, ckt = identificador_linea
-        # TODO se deberia capturar este reporte
-        psspy.sensitivity_flow(
-            [i,j,0,1,2],
-            [0,1,0,0,0,0,1,1,opposing_gen_bus],
-            [ 0.5, 0.1],
-            ckt,
-            ["GEN{}".format(gen_bus), ""],
-            "{}.dfx".format(case)
-        )
-    
+    "Genera una tabla con la sensibilidad para cada generador"
+    ierr, (gen_buses,) = psspy.agenbusint(string="NUMBER")
+    ierr, (pmax,) = psspy.agenbusreal(string="PMAX")
+    gen_buses = [bus for bus, pmax in zip(gen_buses, pmax) if pmax > 0]
 
+    results = []
+    for gen_bus in gen_buses:
+        i, j, ckt = identificador_linea
+        rslt = pssarrays.sensitivity_flow_to_mw(
+            ibus=i, jbus=j, ckt=ckt,
+            mainsys=case,
+            netmod="ac",
+            dfxfile="{}.dfx".format(case),
+            brnflowtyp="mva",
+            transfertyp="import",
+            oppsystyp="subsystem",
+            dispmod=1,
+            oppsys="OPPOSING_GEN{}".format(gen_bus)
+        )
+        # cambio de extended bus a numero
+        for extend_bus_name in rslt['genvalues'].keys():
+            bus_num = int(extend_bus_name.strip().split(" ")[0])
+            rslt['genvalues'][bus_num] = rslt['genvalues'].pop(extend_bus_name)    
+        
+        # genero tabla de datos
+        df = pd.DataFrame(rslt['genvalues']).T
+        df["gen"] = df.index        
+        df["oppsys"] = gen_bus
+        results.append(df)
+        
+    return pd.concat(results, axis=0).reset_index(drop=True)
 
 ## MAIN
 CASE = "IEEE14"
@@ -91,21 +110,23 @@ rslt = correr_accc(CASE)
 
 # ------------------------------------------------------------------------------
 riesgo_total = 0
-
+sensibilidades = []
 for con_id, con_isv in rslt["contingencies"]:
     psspy.getcontingencysavedcase(ZIP_FILE, con_isv)
-    # assert psspy.solved() == 0 # TODO: poner un factor por caso no resuelto
+    assert psspy.solved() == 0 # TODO: poner un factor por caso no resuelto
     riesgo, sobrecargas = calcular_riesgo()    
     riesgo_total += riesgo
+
     
     lineas_sobrecargadas = [identifier for identifier, sobrecarga in sobrecargas.items() if sobrecarga > 0.0]
+    
     for identificador_linea in lineas_sobrecargadas:
-        2
-        sensibilidad = calcular_sensibilidad(CASE, identificador_linea, generadores_participantes)
-        
-    break
-
-
+        sensibilidad = calcular_sensibilidad(CASE, identificador_linea)
+        sensibilidad = sensibilidad[sensibilidad.gen == sensibilidad.oppsys]
+        sensibilidad['con_id'] = con_id
+        sensibilidades.append(sensibilidad)
+    
+cuts = pd.concat(sensibilidades, axis=0).reset_index(drop=True)
 # -----------------------------------------------------------------------------
 #psspy.case(CASE)
 
