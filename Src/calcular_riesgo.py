@@ -1,6 +1,7 @@
 import re
 import zipfile
 import itertools
+import pyomo.environ as pe
 import pandas as pd
 import psse34
 import psspy
@@ -95,6 +96,50 @@ def calcular_sensibilidad(case, identificador_linea):
         results.append(df)
         
     return pd.concat(results, axis=0).reset_index(drop=True)
+
+
+def despacho_economico(cost_file, cuts):
+    # obtener la demanda
+    ierr, (demanda_aparente,) = psspy.aloadcplx(sid=-1, flag=1, string="MVAACT")
+    demanda = sum([s.real for s in demanda_aparente])
+    
+    # parametros de generadores
+    ierr, (gen_bus,) = psspy.agenbusint(sid=-1, flag=1, string="NUMBER")
+    ierr, (pmax, pmin,) = psspy.agenbusreal(sid=-1, flag=1, string=["PMAX", "PMIN"])
+    generator_data = pd.DataFrame()
+    generator_data["BUS"] = gen_bus
+    generator_data["PMAX"] = pmax
+    generator_data["PMIN"] = pmin
+    generator_data = generator_data.set_index("BUS")
+
+    cost = pd.read_csv(cost_file)
+    generator_data = generator_data.join(cost.set_index("GENBUS")).dropna()
+    
+    # modelo de optimizacion
+    m = pe.ConcreteModel()
+    m.G = pe.Set(initialize=generator_data.index)
+    def generator_bounds(m, i):
+        return generator_data.loc[i]["PMIN"], generator_data.loc[i]["PMAX"]
+    m.pg = pe.Var(m.G, bounds=generator_bounds)
+    
+    # objetivo
+    m.objective = pe.Objective(
+        expr=sum(generator_data.COST[i] * m.pg[i] for i in generator_data.index),
+        sense=pe.minimize
+        )
+    
+    # restricciones
+    def balance_potencia(m):
+        return sum(m.pg[i] for i in m.G) == demanda
+    m.balance_potencia = pe.Constraint(rule=balance_potencia)
+    
+    # resolver
+    opt = pe.SolverFactory("appsi_highs")
+    log = opt.solve(m, tee=True)
+    
+    # ajustar el caso
+    # TODO
+    
 
 ## MAIN
 CASE = "IEEE14"
